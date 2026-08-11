@@ -7,14 +7,17 @@ use std::collections::HashMap;
     feature = "cbf"
 ))]
 use crate::client::ClientType;
-use crate::commands::WalletOpts;
+use crate::commands::{WalletOpts, WalletsSubCommand};
 use crate::config::{WalletConfig, WalletConfigInner};
 use crate::error::BDKCliError as Error;
 use crate::handlers::Init;
 use crate::handlers::{AppCommand, AppContext};
 #[cfg(any(feature = "sqlite", feature = "redb"))]
 use crate::persister::DatabaseType;
+use crate::utils::output::FormatOutput;
 use crate::utils::types::{StatusResult, WalletsListResult};
+#[cfg(feature = "redb")]
+use bdk_redb::redb::TableHandle;
 use bdk_wallet::bitcoin::Network;
 use clap::Args;
 
@@ -170,5 +173,128 @@ impl AppCommand<AppContext<Init>> for ListWalletsCommand {
         };
 
         Ok(WalletsListResult(config.wallets))
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "redb"))]
+fn wallet_data_exists(
+    datadir: &std::path::Path,
+    wallet_name: &str,
+    database_type: &str,
+) -> Result<bool, Error> {
+    match database_type {
+        #[cfg(feature = "sqlite")]
+        "sqlite" => {
+            let db_path = datadir.join(wallet_name).join("wallet.sqlite");
+            Ok(db_path.is_file())
+        }
+        #[cfg(feature = "redb")]
+        "redb" => redb_wallet_data_exists(datadir, wallet_name),
+
+        _ => Err(Error::Generic(format!(
+            "Unsupported database type: {database_type}"
+        ))),
+    }
+}
+
+#[cfg(feature = "redb")]
+fn redb_wallet_data_exists(datadir: &std::path::Path, wallet_name: &str) -> Result<bool, Error> {
+    let db_path = datadir.join("wallet.redb");
+    if !db_path.is_file() {
+        return Ok(false);
+    }
+
+    let database = bdk_redb::redb::Database::open(&db_path).map_err(|error| {
+        Error::Generic(format!(
+            "Failed to open Redb database at {db_path:?}: {error}"
+        ))
+    })?;
+
+    let read_transactions = database
+        .begin_read()
+        .map_err(|error| Error::Generic(error.to_string()))?;
+
+    let mut tables = read_transactions.list_tables().map_err(|error| {
+        Error::Generic(format!(
+            "Failed to list tables in Redb database at {db_path:?}: {error}"
+        ))
+    })?;
+
+    let keychain_table_name = format!("{wallet_name}_keychain");
+
+    Ok(tables.any(|table| table.name() == keychain_table_name.as_str()))
+}
+
+#[derive(Args, Debug, Clone, PartialEq)]
+pub struct DeleteWalletConfigCommand {
+    /// Name of the saved wallet configuration to delete.
+    #[arg(value_name = "WALLET_NAME")]
+    pub(crate) wallet_name: String,
+}
+
+impl AppCommand<AppContext<Init>> for DeleteWalletConfigCommand {
+    type Output = StatusResult;
+
+    fn execute(&self, ctx: &mut AppContext<Init>) -> Result<Self::Output, Error> {
+        let mut config = match WalletConfig::load(&ctx.datadir)? {
+            Some(config) => config,
+            None => return Err(Error::Generic("No wallets configured yet.".into())),
+        };
+
+        if !config.wallets.contains_key(&self.wallet_name) {
+            return Err(Error::Generic(format!(
+                "Wallet '{}' not found in config",
+                self.wallet_name
+            )));
+        }
+
+        #[cfg(any(feature = "sqlite", feature = "redb"))]
+        {
+            let wallet_config = config.wallets.get(&self.wallet_name).ok_or_else(|| {
+                Error::Generic(format!("Wallet '{}' not found in config", self.wallet_name))
+            })?;
+
+            if wallet_data_exists(
+                &ctx.datadir,
+                &self.wallet_name,
+                &wallet_config.database_type,
+            )? {
+                return Err(Error::Generic(format!(
+                    "Wallet data exists for configuration '{}'; the saved configuration was not deleted",
+                    self.wallet_name
+                )));
+            }
+        }
+
+        let _removed = config.wallets.remove(&self.wallet_name).ok_or_else(|| {
+            Error::Generic(format!("Wallet '{}' not found in config", self.wallet_name))
+        })?;
+
+        if config.wallets.is_empty() {
+            let config_path = ctx.datadir.join("config.toml");
+            std::fs::remove_file(&config_path).map_err(|error| {
+                Error::Generic(format!(
+                    "Failed to remove config at {config_path:?}: {error}"
+                ))
+            })?;
+        } else {
+            config.save(&ctx.datadir)?;
+        }
+
+        Ok(StatusResult {
+            message: format!(
+                "Wallet configuration '{}' deleted successfully",
+                self.wallet_name
+            ),
+        })
+    }
+}
+
+impl WalletsSubCommand {
+    pub fn execute(&self, ctx: &mut AppContext<Init>) -> Result<(), Error> {
+        match self {
+            Self::List(command) => command.execute(ctx)?.write_out(std::io::stdout()),
+            Self::Delete(command) => command.execute(ctx)?.write_out(std::io::stdout()),
+        }
     }
 }
