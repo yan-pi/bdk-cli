@@ -7,13 +7,14 @@ use std::collections::HashMap;
     feature = "cbf"
 ))]
 use crate::client::ClientType;
-use crate::commands::WalletOpts;
+use crate::commands::{WalletOpts, WalletsSubCommand};
 use crate::config::{WalletConfig, WalletConfigInner};
 use crate::error::BDKCliError as Error;
 use crate::handlers::Init;
 use crate::handlers::{AppCommand, AppContext};
 #[cfg(any(feature = "sqlite", feature = "redb"))]
 use crate::persister::DatabaseType;
+use crate::utils::output::FormatOutput;
 use crate::utils::types::{StatusResult, WalletsListResult};
 use bdk_wallet::bitcoin::Network;
 use clap::Args;
@@ -170,5 +171,57 @@ impl AppCommand<AppContext<Init>> for ListWalletsCommand {
         };
 
         Ok(WalletsListResult(config.wallets))
+    }
+}
+
+#[derive(Args, Debug, Clone, PartialEq)]
+pub struct DeleteWalletConfigCommand {
+    /// Name of the saved wallet configuration to delete.
+    #[arg(value_name = "WALLET_NAME")]
+    pub(crate) wallet_name: String,
+}
+
+impl AppCommand<AppContext<Init>> for DeleteWalletConfigCommand {
+    type Output = StatusResult;
+
+    fn execute(&self, ctx: &mut AppContext<Init>) -> Result<Self::Output, Error> {
+        let mut config = match WalletConfig::load(&ctx.datadir)? {
+            Some(config) => config,
+            None => return Err(Error::Generic("No wallets configured yet.".into())),
+        };
+
+        if config.wallets.remove(&self.wallet_name).is_none() {
+            return Err(Error::Generic(format!(
+                "Wallet '{}' not found in config",
+                self.wallet_name
+            )));
+        }
+
+        if config.wallets.is_empty() {
+            let config_path = ctx.datadir.join("config.toml");
+            std::fs::remove_file(&config_path).map_err(|error| {
+                Error::Generic(format!(
+                    "Failed to remove config at {config_path:?}: {error}"
+                ))
+            })?;
+        } else {
+            config.save(&ctx.datadir)?;
+        }
+
+        Ok(StatusResult {
+            message: format!(
+                "Wallet configuration '{}' deleted successfully",
+                self.wallet_name
+            ),
+        })
+    }
+}
+
+impl WalletsSubCommand {
+    pub fn execute(&self, ctx: &mut AppContext<Init>) -> Result<(), Error> {
+        match self {
+            Self::List(command) => command.execute(ctx)?.write_out(std::io::stdout()),
+            Self::Delete(command) => command.execute(ctx)?.write_out(std::io::stdout()),
+        }
     }
 }

@@ -113,7 +113,7 @@ mod test_wallets {
         let cli = BdkCli::new("testnet", Some(temp_dir.path().to_path_buf()));
 
         let mut cmd = cli.build_base_cmd();
-        cmd.arg("wallets");
+        cmd.arg("wallets").arg("list");
 
         cmd.assert()
             .failure()
@@ -157,6 +157,7 @@ mod test_wallets {
 
         cli.build_base_cmd()
             .arg("wallets")
+            .arg("list")
             .assert()
             .success()
             .stdout(predicate::str::contains("wallet_one"))
@@ -221,6 +222,36 @@ mod test_config {
     use super::*;
     use serde_json::Value;
 
+    fn save_wallet(cli: &BdkCli, wallet_name: &str) {
+        let desc = cli
+            .cmd("descriptor", &["--type", "tr"])
+            .output()
+            .expect("Command to generate descriptors failed");
+
+        let desc_values: Value =
+            serde_json::from_slice(&desc.stdout).expect("Invalid JSON from output descriptor");
+
+        let pub_desc = &desc_values["public_descriptors"];
+
+        cli.build_base_cmd()
+            .arg("wallet")
+            .arg("--wallet")
+            .arg(wallet_name)
+            .arg("config")
+            .arg("--ext-descriptor")
+            .arg(pub_desc["external"].as_str().unwrap())
+            .arg("--int-descriptor")
+            .arg(pub_desc["internal"].as_str().unwrap())
+            .arg("--client-type")
+            .arg("rpc")
+            .arg("--database-type")
+            .arg("sqlite")
+            .arg("--url")
+            .arg("http://localhost:18443")
+            .assert()
+            .success();
+    }
+
     #[test]
     fn test_save_and_read_wallet_config() {
         let temp_dir = TempDir::new().unwrap();
@@ -264,7 +295,7 @@ mod test_config {
 
         // verify saved config
         let mut cmd = cli.build_base_cmd();
-        cmd.arg("wallets");
+        cmd.arg("wallets").arg("list");
 
         let output = cmd.output().expect("Failed to execute wallets command");
 
@@ -290,6 +321,86 @@ mod test_config {
         assert_eq!(config["server_url"].as_str().unwrap(), url);
         assert_eq!(config["ext_descriptor"].as_str().unwrap(), ext_desc);
         assert_eq!(config["int_descriptor"].as_str().unwrap(), int_desc);
+    }
+
+    #[test]
+    fn test_delete_wallet_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let cli = BdkCli::new("regtest", Some(temp_dir.path().to_path_buf()));
+        let remove_wallet_name = "test_delete_wallet";
+        let keep_wallet_name = "test_keep_wallet";
+
+        save_wallet(&cli, remove_wallet_name);
+        save_wallet(&cli, keep_wallet_name);
+
+        // Delete one config: the output is a confirmation message
+        let output = cli
+            .build_base_cmd()
+            .arg("wallets")
+            .arg("delete")
+            .arg(remove_wallet_name)
+            .output()
+            .expect("Failed to execute wallets delete command");
+        assert!(output.status.success(), "wallets delete failed");
+
+        let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            json["message"].as_str().unwrap(),
+            "Wallet configuration 'test_delete_wallet' deleted successfully"
+        );
+
+        // Re-listing no longer contains the deleted wallet
+        let output = cli
+            .build_base_cmd()
+            .arg("wallets")
+            .arg("list")
+            .output()
+            .expect("Failed to execute wallets list command");
+
+        let list: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(list.get(remove_wallet_name).is_none());
+        assert!(list.get(keep_wallet_name).is_some());
+    }
+
+    #[test]
+    fn test_delete_unknown_wallet_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let cli = BdkCli::new("regtest", Some(temp_dir.path().to_path_buf()));
+        save_wallet(&cli, "existing_wallet");
+
+        cli.build_base_cmd()
+            .arg("wallets")
+            .arg("delete")
+            .arg("ghost_wallet")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("not found in config"));
+    }
+
+    #[test]
+    fn test_delete_last_wallet_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let cli = BdkCli::new("regtest", Some(temp_dir.path().to_path_buf()));
+        let config_path = temp_dir.path().join("config.toml");
+
+        save_wallet(&cli, "last_wallet");
+        assert!(config_path.exists());
+
+        cli.build_base_cmd()
+            .arg("wallets")
+            .arg("delete")
+            .arg("last_wallet")
+            .assert()
+            .success();
+
+        assert!(!config_path.exists());
+
+        cli.build_base_cmd()
+            .arg("wallets")
+            .arg("list")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("No wallets configured yet."));
     }
 }
 
