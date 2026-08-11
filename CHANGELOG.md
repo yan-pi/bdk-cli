@@ -5,6 +5,8 @@ page. See [DEVELOPMENT_CYCLE.md](DEVELOPMENT_CYCLE.md) for more details.
 
 ## [Unreleased]
 
+- Split saved wallet configuration operations into `wallets list` and `wallets delete <wallet_name>`
+
 ## [4.0.0]
 
 - Added persistance to existing async payjoin integration
