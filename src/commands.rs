@@ -218,7 +218,10 @@ pub enum WalletsSubCommand {
     /// List saved wallet configurations.
     List(ListWalletsCommand),
 
-    /// Delete a saved wallet configuration.
+    /// Delete an unused saved wallet configuration.
+    ///
+    /// The command refuses deletion once persistent wallet data exists.
+    /// Wallet database files are never deleted.
     Delete(DeleteWalletConfigCommand),
 }
 

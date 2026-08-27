@@ -402,6 +402,60 @@ mod test_config {
             .failure()
             .stderr(predicate::str::contains("No wallets configured yet."));
     }
+
+    #[test]
+    fn test_delete_wallet_config_with_persisted_data_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let cli = BdkCli::new("regtest", Some(temp_dir.path().to_path_buf()));
+        let wallet_name = "persisted_wallet";
+
+        save_wallet(&cli, wallet_name);
+
+        let config_path = temp_dir.path().join("config.toml");
+        let database_path = temp_dir.path().join(wallet_name).join("wallet.sqlite");
+
+        assert!(config_path.is_file());
+        assert!(
+            !database_path.exists(),
+            "saving a configuration alone should not create wallet data"
+        );
+
+        cli.wallet_cmd(&["--wallet", wallet_name, "new_address"])
+            .assert()
+            .success();
+
+        assert!(
+            database_path.is_file(),
+            "new_address should initialize the wallet database"
+        );
+
+        cli.build_base_cmd()
+            .arg("wallets")
+            .arg("delete")
+            .arg(wallet_name)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "Wallet data exists for configuration 'persisted_wallet'",
+            ));
+
+        assert!(
+            config_path.is_file(),
+            "failed deletion should preserve config.toml"
+        );
+
+        assert!(
+            database_path.is_file(),
+            "failed deletion should preserve wallet data"
+        );
+
+        cli.build_base_cmd()
+            .arg("wallets")
+            .arg("list")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(wallet_name));
+    }
 }
 
 //  SILENT PAYMENTS
