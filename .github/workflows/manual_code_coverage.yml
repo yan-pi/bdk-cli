@@ -1,0 +1,41 @@
+name: Manual Code Coverage
+
+on:
+  workflow_dispatch:
+
+jobs:
+  Codecov:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-Cinstrument-coverage"
+      RUSTDOCFLAGS: "-Cinstrument-coverage"
+      LLVM_PROFILE_FILE: "./target/coverage/%p-%m.profraw"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - name: Install grcov
+        run: command -v grcov || cargo install grcov
+      - name: Test
+        run: cargo test --all-features
+      - name: Run grcov
+        run: |
+          mkdir -p coverage
+          grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --keep-only 'src/**' --ignore 'tests/**' -o ./coverage/lcov.info
+      - name: Check lcov.info
+        run: cat ./coverage/lcov.info
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+          flags: rust
