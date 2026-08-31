@@ -534,7 +534,6 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use payjoin::HpkeKeyPair;
-    use payjoin::persist::SessionPersister as _;
     use payjoin::receive::v2::SessionOutcome as ReceiverSessionOutcome;
     use payjoin::send::v2::SessionOutcome as SenderSessionOutcome;
 
